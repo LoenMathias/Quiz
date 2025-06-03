@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Quiz Platform</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    background: #f0f4f8;
+    margin: 0;
+    padding: 0;
+  }
+  header {
+    background: #4a90e2;
+    color: white;
+    padding: 1rem;
+    text-align: center;
+  }
+  main {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 1rem;
+    background: white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  }
+  .hidden { display:none; }
+  .question {
+    margin-bottom: 1rem;
+  }
+  .choices label {
+    display: block;
+    margin: 0.2rem 0;
+  }
+  #progress {
+    margin: 1rem 0;
+    height: 20px;
+    background: #ddd;
+    position: relative;
+  }
+  #progressBar {
+    background: #4caf50;
+    width: 0;
+    height: 100%;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th, td {
+    padding: 0.5rem;
+    border-bottom: 1px solid #ccc;
+    text-align: left;
+  }
+  .summary {
+    margin-top:1rem;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Quiz Platform</h1>
+</header>
+<main>
+  <section id="setup">
+    <h2>Load Questions</h2>
+    <p>Select a JSON file containing an array of questions.</p>
+    <input type="file" id="fileInput" accept="application/json"><br><br>
+    <label>Number of questions:
+      <input type="number" id="questionCount" min="1" value="10">
+    </label><br><br>
+    <label>Passing score (%):
+      <input type="number" id="passingScore" min="0" max="100" value="80">
+    </label><br><br>
+    <button id="startBtn">Start Quiz</button>
+  </section>
+
+  <section id="quiz" class="hidden">
+    <div id="progress"><div id="progressBar"></div></div>
+    <div id="questionContainer"></div>
+    <button id="nextBtn">Next</button>
+  </section>
+
+  <section id="result" class="hidden"></section>
+
+  <section id="history" class="hidden">
+    <h2>History</h2>
+    <div id="historyStats"></div>
+    <table id="historyTable"></table>
+  </section>
+</main>
+<script>
+const fileInput = document.getElementById('fileInput');
+const startBtn = document.getElementById('startBtn');
+const nextBtn = document.getElementById('nextBtn');
+const questionContainer = document.getElementById('questionContainer');
+const quizSection = document.getElementById('quiz');
+const setupSection = document.getElementById('setup');
+const resultSection = document.getElementById('result');
+const historySection = document.getElementById('history');
+const questionCountInput = document.getElementById('questionCount');
+const passingScoreInput = document.getElementById('passingScore');
+const progressBar = document.getElementById('progressBar');
+
+let questions = [];
+let quizQuestions = [];
+let currentQuestion = 0;
+let correctAnswers = 0;
+
+function shuffle(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
+}
+
+function loadFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        resolve(data);
+      } catch(e) {
+        reject('Invalid JSON');
+      }
+    };
+    reader.onerror = () => reject('Error reading file');
+    reader.readAsText(file);
+  });
+}
+
+function updateProgress() {
+  const percent = (currentQuestion / quizQuestions.length) * 100;
+  progressBar.style.width = percent + '%';
+}
+
+function showQuestion() {
+  updateProgress();
+  const q = quizQuestions[currentQuestion];
+  const div = document.createElement('div');
+  div.className = 'question';
+  div.innerHTML = `<h3>Question ${currentQuestion + 1} of ${quizQuestions.length}</h3>` +
+                  `<p>${q.question}</p>`;
+  const choicesDiv = document.createElement('div');
+  choicesDiv.className = 'choices';
+  q.choices.forEach((choice, idx) => {
+    const id = `choice${idx}`;
+    choicesDiv.innerHTML += `
+      <label><input type="radio" name="choice" value="${idx}"> ${choice}</label>`;
+  });
+  div.appendChild(choicesDiv);
+  questionContainer.innerHTML = '';
+  questionContainer.appendChild(div);
+}
+
+function showResult() {
+  quizSection.classList.add('hidden');
+  resultSection.classList.remove('hidden');
+  const percent = Math.round((correctAnswers / quizQuestions.length) * 100);
+  const passMark = parseInt(passingScoreInput.value, 10);
+  const passed = percent >= passMark;
+  const html = `
+    <h2>${passed ? 'Passed' : 'Failed'} - ${percent}%</h2>
+    <p>You answered ${correctAnswers} of ${quizQuestions.length} correctly.</p>
+    <button id="restartBtn">Restart</button>
+    <button id="viewHistoryBtn">View History</button>
+  `;
+  resultSection.innerHTML = html;
+  document.getElementById('restartBtn').addEventListener('click', () => {
+    resultSection.classList.add('hidden');
+    setupSection.classList.remove('hidden');
+  });
+  document.getElementById('viewHistoryBtn').addEventListener('click', () => {
+    resultSection.classList.add('hidden');
+    displayHistory();
+  });
+
+  saveHistory(percent, passed);
+}
+
+function saveHistory(percent, passed) {
+  const history = JSON.parse(localStorage.getItem('quizHistory') || '[]');
+  history.push({
+    date: new Date().toISOString(),
+    percent,
+    total: quizQuestions.length,
+    correct: correctAnswers,
+    passed
+  });
+  localStorage.setItem('quizHistory', JSON.stringify(history));
+}
+
+function displayHistory() {
+  historySection.classList.remove('hidden');
+  const history = JSON.parse(localStorage.getItem('quizHistory') || '[]');
+  if (history.length === 0) {
+    historySection.innerHTML = '<p>No attempts yet.</p>';
+    return;
+  }
+  let passCount = history.filter(h => h.passed).length;
+  let perfectCount = history.filter(h => h.percent === 100).length;
+  let avg = Math.round(history.reduce((a, h) => a + h.percent, 0) / history.length);
+
+  document.getElementById('historyStats').innerHTML = `
+    <p>Attempts: ${history.length}</p>
+    <p>Average Score: ${avg}%</p>
+    <p>Passed: ${passCount}</p>
+    <p>Perfect Scores: ${perfectCount}</p>
+    <button id="backBtn">Back</button>
+  `;
+  document.getElementById('backBtn').addEventListener('click', () => {
+    historySection.classList.add('hidden');
+    setupSection.classList.remove('hidden');
+  });
+
+  const table = document.getElementById('historyTable');
+  table.innerHTML = '<tr><th>Date</th><th>Score</th><th>Passed</th></tr>';
+  history.slice().reverse().forEach(h => {
+    const row = document.createElement('tr');
+    row.innerHTML = `<td>${new Date(h.date).toLocaleString()}</td><td>${h.percent}%</td><td>${h.passed ? 'Yes' : 'No'}</td>`;
+    table.appendChild(row);
+  });
+}
+
+nextBtn.addEventListener('click', () => {
+  const choice = document.querySelector('input[name="choice"]:checked');
+  if (choice) {
+    if (parseInt(choice.value, 10) === quizQuestions[currentQuestion].answer) {
+      correctAnswers++;
+    }
+    currentQuestion++;
+    if (currentQuestion < quizQuestions.length) {
+      showQuestion();
+    } else {
+      showResult();
+    }
+  } else {
+    alert('Please select an answer');
+  }
+});
+
+startBtn.addEventListener('click', async () => {
+  if (!fileInput.files[0]) {
+    alert('Please choose a file');
+    return;
+  }
+  try {
+    questions = await loadFile(fileInput.files[0]);
+  } catch(e) {
+    alert(e);
+    return;
+  }
+  const count = Math.min(parseInt(questionCountInput.value, 10), questions.length);
+  quizQuestions = shuffle(questions.slice()).slice(0, count);
+  currentQuestion = 0;
+  correctAnswers = 0;
+  setupSection.classList.add('hidden');
+  resultSection.classList.add('hidden');
+  historySection.classList.add('hidden');
+  quizSection.classList.remove('hidden');
+  showQuestion();
+});
+</script>
+</body>
+</html>
